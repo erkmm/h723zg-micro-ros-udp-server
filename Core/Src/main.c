@@ -18,54 +18,24 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "cmsis_os.h"
 #include "dma.h"
-#include "i2c.h"
-#include "spi.h"
-#include "tim.h"
 #include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <math.h>
-//#include "bno080.h"
-//#include "quaternion.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-int __io_putchar(int ch) {
-       HAL_UART_Transmit(&huart3, (uint8_t*) &ch, 1, 0xFFFF);
-       return ch;
-}
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define RAD_TO_DEG (180.0/M_PI)
-//#define SCALE_Q(n) (1.0 / (1 << n))
-#define SCALE_Q(n) (pow(0.5, n))
-//#define BNO_I2C_ADDRESS (0x4A << 1) // Adafruit
-#define BNO_I2C_ADDRESS (0x4B << 1) // SparkFun BNO086
-#define BNO_I2C_HANDLE &hi2c1
-#define BNO_READ_PERIOD 20 // ms
 
-__attribute__((section(".axi_sram"), aligned(32), used)) uint8_t BnoRxBuff[BNO_MSG_LENGTH];
-
-//uint8_t BnoRxBuff[BNO_MSG_LENGTH];
-int16_t Data1;
-int16_t Data2;
-int16_t Data3;
-int16_t Data4;
-
-imu_t bno080_st;
-
-
-char lcd_line[64];
-uint32_t BnoSoftTimer;
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -76,137 +46,19 @@ uint32_t BnoSoftTimer;
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-uint8_t START_BNO_STABILIZED_ROTATION_VECTOR_100_HZ[/* BNO_MSG_LENGTH */] =
-{ 0x15, 0x00, 0x02, 0x00,
-  0xFD,
-  0x28,
-  0x00, 0x00, 0x00,
-  0x10, 0x27, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00 };
-// Calibrated Accelerometer (0x01) - 100Hz = 10000us = 0x2710
-uint8_t START_CALIBRATED_ACCEL_100_HZ[] = {
-    0x15, 0x00, 0x02, 0x00,   // length, channel, seqnum
-    0xFD,                      // Set Feature Command
-    0x01,                      // Report ID: Calibrated Accelerometer
-    0x00, 0x00, 0x00,
-    0x10, 0x27, 0x00, 0x00,   // 10000us = 100Hz
-    0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00
-};
 
-// Calibrated Gyroscope (0x02) - 100Hz
-uint8_t START_CALIBRATED_GYRO_100_HZ[] = {
-    0x15, 0x00, 0x02, 0x00,
-    0xFD,
-    0x02,                      // Report ID: Calibrated Accelerometer
-    0x00, 0x00, 0x00,
-    0x10, 0x27, 0x00, 0x00,   // 10000us = 100Hz
-    0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00
-};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MPU_Config(void);
+void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void HAL_I2C_MasterRxCpltCallback(I2C_HandleTypeDef *hi2c)
-{
-    if (hi2c->Instance == I2C1)
-    {
-        // Invalidate D-Cache FIRST before reading buffer
-        SCB_InvalidateDCache_by_Addr((uint32_t*)BnoRxBuff, BNO_MSG_LENGTH);
-
-        uint16_t pkt_len = ((uint16_t)(BnoRxBuff[1] & 0x7F) << 8) | BnoRxBuff[0];
-        uint8_t  channel = BnoRxBuff[2];
-
-        if ((channel == 2 || channel == 3) && pkt_len > 4)
-        {
-            bno080_st.rx_flag_u8 = 1;
-            BSP_LED_Toggle(LED_YELLOW);
-        }
-        HAL_I2C_Master_Receive_DMA(BNO_I2C_HANDLE, BNO_I2C_ADDRESS,
-                                   BnoRxBuff, BNO_MSG_LENGTH);
-    }
-}
-
-void bno080_init(void)
-{
-	HAL_I2C_Master_Transmit(BNO_I2C_HANDLE, BNO_I2C_ADDRESS,
-			START_BNO_STABILIZED_ROTATION_VECTOR_100_HZ,
-			sizeof(START_BNO_STABILIZED_ROTATION_VECTOR_100_HZ), 10);
-	HAL_Delay(100);
-  HAL_I2C_Master_Transmit(BNO_I2C_HANDLE, BNO_I2C_ADDRESS,
-			START_CALIBRATED_ACCEL_100_HZ,
-			sizeof(START_CALIBRATED_ACCEL_100_HZ), 10);  
-	HAL_Delay(100);
-  HAL_I2C_Master_Transmit(BNO_I2C_HANDLE, BNO_I2C_ADDRESS,
-			START_CALIBRATED_GYRO_100_HZ,
-			sizeof(START_CALIBRATED_GYRO_100_HZ), 10);        
-	HAL_Delay(100);
-  HAL_I2C_Master_Receive_DMA(BNO_I2C_HANDLE, BNO_I2C_ADDRESS, BnoRxBuff,
-	BNO_MSG_LENGTH);
-}
-
-void process_imu_rx(imu_t *p_imu_st)
-{
-    // Safe snapshot after cache has been invalidated in callback
-    memcpy(p_imu_st->pkt, BnoRxBuff, BNO_MSG_LENGTH);
-    int32_t Qi, Qj, Qk, Qr;
-    uint8_t channel   = p_imu_st->pkt[2];
-    uint8_t report_id = p_imu_st->pkt[9];  // byte 9 confirmed correct from your buffer
-
-    if (channel != 2 && channel != 3) return;
-
-    // All reports: data bytes start at [13], little-endian int16
-    int16_t raw1 = (int16_t)(((uint16_t)p_imu_st->pkt[14] << 8) | p_imu_st->pkt[13]);
-    int16_t raw2 = (int16_t)(((uint16_t)p_imu_st->pkt[16] << 8) | p_imu_st->pkt[15]);
-    int16_t raw3 = (int16_t)(((uint16_t)p_imu_st->pkt[18] << 8) | p_imu_st->pkt[17]);
-    int16_t raw4 = (int16_t)(((uint16_t)p_imu_st->pkt[20] << 8) | p_imu_st->pkt[19]);
-
-    if (report_id == 0x01)  // Calibrated Accelerometer — Q8 = 1/256 m/s²
-    {
-        p_imu_st->accel_st.x_i32 = 1000 * (float)raw1 * SCALE_Q(8);
-        p_imu_st->accel_st.y_i32 = 1000 * (float)raw2 * SCALE_Q(8);
-        p_imu_st->accel_st.z_i32 = 1000 * (float)raw3 * SCALE_Q(8);
-    }
-    else if (report_id == 0x02)  // Calibrated Gyroscope — Q9 = 1/512 rad/s
-    {
-        p_imu_st->gyro_st.x_i32 = 1000 * (float)raw1 * SCALE_Q(9);
-        p_imu_st->gyro_st.y_i32 = 1000 * (float)raw2 * SCALE_Q(9);
-        p_imu_st->gyro_st.z_i32 = 1000 * (float)raw3 * SCALE_Q(9);
-    }
-    else if (report_id == 0x28)  // ARVR-Stabilized Rotation Vector — Q14
-    {
-        Qr = 1000 * (float)raw1 * SCALE_Q(14);
-        Qi = 1000 * (float)raw2 * SCALE_Q(14);
-        Qj = 1000 * (float)raw3 * SCALE_Q(14);
-        Qk = 1000 * (float)raw4 * SCALE_Q(14);
-
-        int16_t norm = Qi*Qi + Qj*Qj + Qk*Qk + Qr*Qr;
-        if (norm < 0.001) return;
-
-        p_imu_st->vector_st.x_i32   = atan2(2.0*(Qi*Qj + Qk*Qr),
-                     (Qi*Qi - Qj*Qj - Qk*Qk + Qr*Qr)) * RAD_TO_DEG;
-        p_imu_st->vector_st.y_i32 = asin(-2.0*(Qi*Qk - Qj*Qr) / norm) * RAD_TO_DEG;
-        p_imu_st->vector_st.z_i32  = atan2(2.0*(Qj*Qk + Qi*Qr),
-                     (-Qi*Qi - Qj*Qj + Qk*Qk + Qr*Qr)) * RAD_TO_DEG;
-    }
-}
-
-void imu_print(imu_t *p_imu_st)
-{
-  printf("Accel X:%ld Y:%ld Z:%ld mm/s2 Gyro X:%ld Y:%ld Z:%ld mrad/s Yaw %ld Pitch %ld Roll %ld\r\n",
-  p_imu_st->accel_st.x_i32, p_imu_st->accel_st.y_i32, p_imu_st->accel_st.z_i32, p_imu_st->gyro_st.x_i32, p_imu_st->gyro_st.y_i32, p_imu_st->gyro_st.z_i32,
-  p_imu_st->vector_st.x_i32, p_imu_st->vector_st.y_i32, p_imu_st->vector_st.z_i32);
-}
-
 
 /* USER CODE END 0 */
 
@@ -249,17 +101,16 @@ int main(void)
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
-  MX_DMA_Init();
   MX_GPIO_Init();
-  MX_I2C1_Init();
-  MX_SPI2_Init();
-  MX_TIM3_Init();
+  MX_DMA_Init();
   MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
-  bno080_init();
-  BnoSoftTimer = HAL_GetTick();
-  printf("init ok");
+
   /* USER CODE END 2 */
+
+  /* Init scheduler */
+  osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
+  MX_FREERTOS_Init();
 
   /* Initialize leds */
   BSP_LED_Init(LED_GREEN);
@@ -269,6 +120,11 @@ int main(void)
   /* Initialize USER push-button, will be used to trigger an interrupt each time it's pressed.*/
   BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);
 
+  /* Start scheduler */
+  osKernelStart();
+
+  /* We should never get here as control is now taken by the scheduler */
+
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
@@ -277,18 +133,6 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    if (HAL_GetTick() - BnoSoftTimer > BNO_READ_PERIOD)
-		{
-			BnoSoftTimer = HAL_GetTick();
-
-      if(bno080_st.rx_flag_u8)
-      {
-        bno080_st.rx_flag_u8 = 0;
-        process_imu_rx(&bno080_st);
-        imu_print(&bno080_st);
-      }
-    }
-  
   }
   /* USER CODE END 3 */
 }
@@ -323,7 +167,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLM = 4;
   RCC_OscInitStruct.PLL.PLLN = 34;
   RCC_OscInitStruct.PLL.PLLP = 1;
-  RCC_OscInitStruct.PLL.PLLQ = 3;
+  RCC_OscInitStruct.PLL.PLLQ = 4;
   RCC_OscInitStruct.PLL.PLLR = 2;
   RCC_OscInitStruct.PLL.PLLRGE = RCC_PLL1VCIRANGE_3;
   RCC_OscInitStruct.PLL.PLLVCOSEL = RCC_PLL1VCOWIDE;
@@ -360,24 +204,64 @@ void SystemClock_Config(void)
 
 void MPU_Config(void)
 {
+  MPU_Region_InitTypeDef MPU_InitStruct = {0};
 
   /* Disables the MPU */
-  LL_MPU_Disable();
+  HAL_MPU_Disable();
 
   /** Initializes and configures the Region and the memory to be protected
   */
-  LL_MPU_ConfigRegion(LL_MPU_REGION_NUMBER0, 0x87, 0x0, LL_MPU_REGION_SIZE_4GB|LL_MPU_TEX_LEVEL0|LL_MPU_REGION_NO_ACCESS|LL_MPU_INSTRUCTION_ACCESS_DISABLE|LL_MPU_ACCESS_SHAREABLE|LL_MPU_ACCESS_NOT_CACHEABLE|LL_MPU_ACCESS_NOT_BUFFERABLE);
+  MPU_InitStruct.Enable = MPU_REGION_ENABLE;
+  MPU_InitStruct.Number = MPU_REGION_NUMBER0;
+  MPU_InitStruct.BaseAddress = 0x0;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_4GB;
+  MPU_InitStruct.SubRegionDisable = 0x87;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
+  MPU_InitStruct.AccessPermission = MPU_REGION_NO_ACCESS;
+  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
 
   /** Initializes and configures the Region and the memory to be protected
   */
-  LL_MPU_ConfigRegion(LL_MPU_REGION_NUMBER1, 0x0, 0x30000000, LL_MPU_REGION_SIZE_8KB|LL_MPU_TEX_LEVEL0|LL_MPU_REGION_NO_ACCESS|LL_MPU_INSTRUCTION_ACCESS_ENABLE|LL_MPU_ACCESS_SHAREABLE|LL_MPU_ACCESS_NOT_CACHEABLE|LL_MPU_ACCESS_NOT_BUFFERABLE);
+  MPU_InitStruct.Number = MPU_REGION_NUMBER1;
+  MPU_InitStruct.BaseAddress = 0x24000000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_16KB;
+  MPU_InitStruct.SubRegionDisable = 0x0;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
+  MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_ENABLE;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
 
-  /** Initializes and configures the Region and the memory to be protected
-  */
-  LL_MPU_ConfigRegion(LL_MPU_REGION_NUMBER2, 0x0, 0x24000000, LL_MPU_REGION_SIZE_16KB|LL_MPU_TEX_LEVEL1|LL_MPU_REGION_FULL_ACCESS|LL_MPU_INSTRUCTION_ACCESS_ENABLE|LL_MPU_ACCESS_NOT_SHAREABLE|LL_MPU_ACCESS_NOT_CACHEABLE|LL_MPU_ACCESS_NOT_BUFFERABLE);
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
   /* Enables the MPU */
-  LL_MPU_Enable(LL_MPU_CTRL_PRIVILEGED_DEFAULT);
+  HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
 
+}
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM1 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
+
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM1)
+  {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
 }
 
 /**
