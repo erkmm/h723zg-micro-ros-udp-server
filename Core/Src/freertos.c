@@ -36,6 +36,7 @@
 
 #include <std_msgs/msg/int32.h>
 #include <geometry_msgs/msg/accel.h>
+#include <sensor_msgs/msg/nav_sat_fix.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -157,9 +158,11 @@ void StartDefaultTask(void *argument)
 	  // micro-ROS app
 
 	  rcl_publisher_t publisher;
-    rcl_publisher_t acc_publisher;    
+    rcl_publisher_t acc_publisher;
+    rcl_publisher_t gps_publisher;
     std_msgs__msg__Int32 msg;
     geometry_msgs__msg__Accel acc_msg;
+    sensor_msgs__msg__NavSatFix gps_msg;
 	  rclc_support_t support;
 	  rcl_allocator_t allocator;
 	  rcl_node_t node;
@@ -181,11 +184,19 @@ void StartDefaultTask(void *argument)
 
     rclc_publisher_init_default(&acc_publisher, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Accel), "imu_acc");
-  
+
+    rclc_publisher_init_default(&gps_publisher, &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, NavSatFix), "gps_fix");
+
 	  msg.data = 0;
 	  acc_msg.linear.z = 9000;
 	  acc_msg.linear.x = 300;
 	  acc_msg.linear.y = 120;
+	  sensor_msgs__msg__NavSatFix__init(&gps_msg);
+	  gps_msg.latitude  = 30.0;
+	  gps_msg.longitude = 10.0;
+	  gps_msg.altitude  = 0.0;
+	  gps_msg.status.status = 0;
 	  for(;;)
 	  {
 	    rcl_ret_t ret = rcl_publish(&publisher, &msg, NULL);
@@ -199,7 +210,12 @@ void StartDefaultTask(void *argument)
 	      printf("Error publishing Acc (line %d)\n", __LINE__);
 	    }
 
-
+	    rcl_ret_t ret_gps = rcl_publish(&gps_publisher, &gps_msg, NULL);
+	    if (ret_gps != RCL_RET_OK)
+	    {
+	      printf("Error publishing GPS (line %d)\n", __LINE__);
+	    }
+      gps_msg.status.status++;
 	    msg.data++;
 	    osDelay(10);
 	  }
