@@ -35,6 +35,7 @@
 #include <rmw_microros/rmw_microros.h>
 
 #include <std_msgs/msg/int32.h>
+#include <geometry_msgs/msg/accel.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -156,7 +157,9 @@ void StartDefaultTask(void *argument)
 	  // micro-ROS app
 
 	  rcl_publisher_t publisher;
-	  std_msgs__msg__Int32 msg;
+    rcl_publisher_t acc_publisher;    
+    std_msgs__msg__Int32 msg;
+    geometry_msgs__msg__Accel acc_msg;
 	  rclc_support_t support;
 	  rcl_allocator_t allocator;
 	  rcl_node_t node;
@@ -167,17 +170,22 @@ void StartDefaultTask(void *argument)
 	  rclc_support_init(&support, 0, NULL, &allocator);
 
 	  // create node
-	  rclc_node_init_default(&node, "cubemx_node", "", &support);
+	  rclc_node_init_default(&node, "imu_data_node", "", &support);
 
 	  // create publisher
 	  rclc_publisher_init_default(
 	    &publisher,
 	    &node,
 	    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-	    "cubemx_publisher");
+	    "acc_publisher");
 
+    rclc_publisher_init_default(&acc_publisher, &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Accel), "imu_acc");
+  
 	  msg.data = 0;
-
+	  acc_msg.linear.z = 9000;
+	  acc_msg.linear.x = 300;
+	  acc_msg.linear.y = 120;
 	  for(;;)
 	  {
 	    rcl_ret_t ret = rcl_publish(&publisher, &msg, NULL);
@@ -185,6 +193,12 @@ void StartDefaultTask(void *argument)
 	    {
 	      printf("Error publishing (line %d)\n", __LINE__);
 	    }
+	    rcl_ret_t ret_acc = rcl_publish(&acc_publisher, &acc_msg, NULL);
+	    if (ret_acc != RCL_RET_OK)
+	    {
+	      printf("Error publishing Acc (line %d)\n", __LINE__);
+	    }
+
 
 	    msg.data++;
 	    osDelay(10);
